@@ -133,38 +133,59 @@ jobs:
         run: docker run --rm -e PYTHONUNBUFFERED=1 app:ci pytest -q
 
   # ------------------------------------------------------------------
-  # 6. Анализ образа контейнера (Trivy Image)
+  # 6. Анализ образа контейнера (Trivy Image + SBOM)
   # ------------------------------------------------------------------
   trivy-image:
-    name: Trivy Image (container)
+    name: Trivy Image (Scan + SBOM)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Нам нужно собрать образ здесь снова, так как это другой раннер
+
+      # 1. Сборка образа (нужна локально для сканирования)
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          load: true # Загружаем в локальный Docker демона
+          load: true
           tags: app:ci
 
-      - name: Trivy Image scan
+      # 2. Сканирование на уязвимости (Security Scan)
+      - name: Trivy Image Vulnerability Scan
         uses: aquasecurity/trivy-action@0.20.0
         with:
-          image-ref: 'app:ci' # Сканируем тег, который только что собрали
+          image-ref: 'app:ci'
           format: 'sarif'
           output: 'trivy-image.sarif'
           severity: 'HIGH,CRITICAL'
-          exit-code: '1'
-          ignore-unfixed: true # Игнорируем уязвимости, для которых нет патчей
+          exit-code: '1'      # Падать, если есть дыры
+          ignore-unfixed: true
 
+      # 3. Генерация SBOM (Inventory) - НОВЫЙ ШАГ
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: 'image'
+          image-ref: 'app:ci'
+          format: 'cyclonedx' # Стандартный формат для SBOM
+          output: 'sbom.cdx.json'
+          # Важно: здесь мы НЕ ставим exit-code, так как это просто отчет о составе
+
+      # 4. Загрузка отчета об уязвимостях (SARIF)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: trivy-image-sarif
           path: trivy-image.sarif
+
       - uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-image.sarif
+
+      # 5. Загрузка SBOM файла (JSON) - НОВЫЙ ШАГ
+      - name: Upload SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
