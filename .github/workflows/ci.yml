@@ -8,36 +8,37 @@ on:
 
 permissions:
   contents: read
-  security-events: write # Нужно для загрузки отчетов gitleaks и других сканеров
+  security-events: write
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # 1. Линтеры и проверки кода
   pre-commit:
     name: pre-commit checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          
+
       - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
           pip install pre-commit
-          
+
       - name: Run pre-commit
+        # pre-commit вернет ошибку, если найдет проблемы в коде.
+        # Это нормально: исправьте код локально и запушьте снова.
         run: |
           pre-commit run -a --show-diff-on-failure
 
-  # 2. Сборка и тесты
   build-test:
     name: Build and Test (Docker)
+    needs: [pre-commit] # Запустим тесты только если линтеры прошли успешно
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,33 +59,36 @@ jobs:
         run: |
           docker run --rm -e PYTHONUNBUFFERED=1 app:ci pytest -q
 
-  gitleaks:
+  leaks:
     name: Gitleaks (secrets)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # ОБЯЗАТЕЛЬНО: нужно скачать всю историю git для поиска
+          fetch-depth: 0
 
       - name: Install gitleaks
-        # Флаг -b . скачивает бинарник в текущую директорию
+        # Скачиваем бинарный файл напрямую, чтобы избежать проблем со скриптами
         run: |
-          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | bash -s -- -b . v8.18.4
+          wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks version
 
       - name: Run gitleaks
-        # exit-code нужен, чтобы пайплайн падал, если найдены секреты
+        # Теперь gitleaks доступен глобально
         run: |
-          ./gitleaks detect --redact --report-format sarif --report-path gitleaks.sarif --exit-code 1
+          gitleaks detect --redact --report-format sarif --report-path gitleaks.sarif --exit-code 1
 
       - name: Upload artifact
-        if: always() # Загружать артефакт даже если gitleaks нашел ошибки и упал
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-sarif
           path: gitleaks.sarif
 
       - name: Upload SARIF to Code Scanning
-        if: always() # Загружать в Security вкладку даже при ошибке
+        if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
