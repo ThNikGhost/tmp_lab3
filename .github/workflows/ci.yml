@@ -148,7 +148,7 @@ jobs:
           file: ./Dockerfile
           load: true # Загружаем в локальный Docker демона
           tags: app:ci
-      
+
       - name: Trivy Image scan
         uses: aquasecurity/trivy-action@0.20.0
         with:
@@ -158,7 +158,7 @@ jobs:
           severity: 'HIGH,CRITICAL'
           exit-code: '1'
           ignore-unfixed: true # Игнорируем уязвимости, для которых нет патчей
-      
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
