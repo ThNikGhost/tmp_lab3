@@ -1,0 +1,14 @@
+# Docker ignore
+.git
+.github
+.gitlab-ci.yml
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+.env
+.pytest_cache
+.mypy_cache
+.DS_Store

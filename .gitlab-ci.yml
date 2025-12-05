@@ -1,0 +1,84 @@
+stages: [prechecks, build, test, security, report]
+
+variables:
+  DOCKER_TLS_CERTDIR: ""
+
+precommit:
+  stage: prechecks
+  image: python:3.12-slim
+  script:
+    - python -m pip install --upgrade pip
+    - pip install pre-commit
+    - pre-commit run -a --show-diff-on-failure
+
+build_image:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  script:
+    - docker build -t app:ci .
+  artifacts:
+    name: app-ci-image-metadata
+    expire_in: 1 week
+
+pytest:
+  stage: test
+  image: docker:27
+  services: [docker:27-dind]
+  needs: ["build_image"]
+  script:
+    - docker run --rm -e PYTHONUNBUFFERED=1 app:ci pytest -q
+
+gitleaks:
+  stage: security
+  image: zricethezav/gitleaks:latest
+  script:
+    - gitleaks detect --redact --report-format sarif --report-path gitleaks.sarif
+  artifacts:
+    when: always
+    paths: [gitleaks.sarif]
+    expire_in: 1 week
+
+semgrep:
+  stage: security
+  image: returntocorp/semgrep:latest
+  script:
+    - semgrep ci --config p/owasp-top-ten --sarif --output semgrep.sarif
+  artifacts:
+    when: always
+    paths: [semgrep.sarif]
+    expire_in: 1 week
+
+trivy_fs:
+  stage: security
+  image: aquasecurity/trivy:latest
+  script:
+    - trivy fs --exit-code 1 --format sarif --output trivy-fs.sarif --ignore-unfixed --severity HIGH,CRITICAL .
+  artifacts:
+    when: always
+    paths: [trivy-fs.sarif]
+    expire_in: 1 week
+
+trivy_image:
+  stage: security
+  image: docker:27
+  services: [docker:27-dind]
+  script:
+    - docker build -t app:ci .
+    - apk add --no-cache curl
+    - curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+    - trivy image --exit-code 1 --format sarif --output trivy-image.sarif --ignore-unfixed --severity HIGH,CRITICAL app:ci
+  artifacts:
+    when: always
+    paths: [trivy-image.sarif]
+    expire_in: 1 week
+
+sbom:
+  stage: report
+  image: aquasecurity/trivy:latest
+  script:
+    - trivy sbom --format cyclonedx --output sbom.cdx.json .
+  artifacts:
+    when: always
+    paths: [sbom.cdx.json]
+    expire_in: 1 week
